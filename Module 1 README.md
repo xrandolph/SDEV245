@@ -1,0 +1,1 @@
+The app asks for a users credentials in order to grand them to the system. It then outlines for the user what resources are granted to them. If the credentials are incorrect, it will not allow the individual access to the system
