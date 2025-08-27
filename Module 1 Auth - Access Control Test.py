@@ -39,4 +39,6 @@ def main():
     else:
         print("\nAuthentification failed. Invalid username or password")
 if __name__ == "__main__":
+
     main()
+#This app shows the confidentiality portion of CIA by limiting who can gain access to the system. If the incorrect credentials are entered, the individual can not gain access.
