@@ -1,0 +1,200 @@
+import os, json, math, random, hashlib
+from dataclasses import dataclass
+from typing import Dict, Callable, Any, Tuple
+
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+def salted_hash(password: str, salt: str) -> str:
+    return sha256_hex((salt + password).encode())
+
+@dataclass
+class User:
+    username: str
+    salt: str
+    password_hash: str
+    role: str
+
+class AuthSystem:
+    def __init__(self, users: Dict[str, User]):
+        self.users = users
+        self.current_user = None
+
+    def login(self, username: str, password: str) -> bool:
+        user = self.users.get(username)
+        if not user:
+            return False
+        if salted_hash(password, user.salt) == user.password_hash:
+            self.current_user = user
+            return True
+        return False
+
+    def require_role(self, *allowed_roles: str):
+        def decorator(func: Callable[..., Any]):
+            def wrapper(*args, **kwargs):
+                if not self.current_user:
+                    raise PermissionError("Not authenticated")
+                if self.current_user.role not in allowed_roles:
+                    raise PermissionError(
+                        f"Access denied: role '{self.current_user.role}' needs one of {allowed_roles}"
+                    )
+                return func(*args, **kwargs)
+            return wrapper
+        return decorator
+
+def prng_stream(key_bytes: bytes, n: int) -> bytes:
+    stream = bytearray()
+    counter = 0
+    seed = key_bytes
+    while len(stream) < n:
+        counter_bytes = counter.to_bytes(8, "big")
+        stream.extend(hashlib.sha256(seed + counter_bytes).digest())
+        counter += 1
+    return bytes(stream[:n])
+
+def xor_encrypt(key: str, plaintext: bytes) -> bytes:
+    key_bytes = hashlib.sha256(key.encode()).digest()
+    keystream = prng_stream(key_bytes, len(plaintext))
+    return bytes([p ^ k for p, k in zip(plaintext, keystream)])
+
+def xor_decrypt(key: str, ciphertext: bytes) -> bytes:
+    return xor_encrypt(key, ciphertext)
+
+
+def is_probable_prime(n: int, k: int = 8) -> bool:
+    if n < 2:
+        return False
+    small_primes = [2,3,5,7,11,13,17,19,23,29]
+    for p in small_primes:
+        if n % p == 0:
+            return n == p
+    d = n - 1
+    s = 0
+    while d % 2 == 0:
+        d //= 2
+        s += 1
+    for _ in range(k):
+        a = random.randrange(2, n - 2)
+        x = pow(a, d, n)
+        if x == 1 or x == n - 1:
+            continue
+        for __ in range(s - 1):
+            x = pow(x, 2, n)
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+def gen_prime(bits: int) -> int:
+    while True:
+        candidate = random.getrandbits(bits) | 1 | (1 << (bits - 1))
+        if is_probable_prime(candidate):
+            return candidate
+
+def egcd(a: int, b: int):
+    if b == 0:
+        return a, 1, 0
+    g, x1, y1 = egcd(b, a % b)
+    return g, y1, x1 - (a // b) * y1
+
+def modinv(a: int, m: int) -> int:
+    g, x, _ = egcd(a, m)
+    if g != 1:
+        raise ValueError("No modular inverse")
+    return x % m
+
+@dataclass
+class RSAKeyPair:
+    n: int
+    e: int
+    d: int
+
+def rsa_keygen(bits: int = 512) -> RSAKeyPair:
+    p = gen_prime(bits // 2)
+    q = gen_prime(bits // 2)
+    while q == p:
+        q = gen_prime(bits // 2)
+    n = p * q
+    phi = (p-1)*(q-1)
+    e = 65537
+    if math.gcd(e, phi) != 1:
+        return rsa_keygen(bits)
+    d = modinv(e, phi)
+    return RSAKeyPair(n=n, e=e, d=d)
+
+def rsa_encrypt(m: int, pub: Tuple[int,int]) -> int:
+    n, e = pub
+    if m >= n:
+        raise ValueError("Message too large for key size")
+    return pow(m, e, n)
+
+def rsa_decrypt(c: int, priv: Tuple[int,int]) -> int:
+    n, d = priv
+    return pow(c, d, n)
+
+def str_to_int(s: str) -> int:
+    return int.from_bytes(s.encode(), "big")
+
+def int_to_str(x: int) -> str:
+    length = (x.bit_length()+7)//8
+    return x.to_bytes(length, "big").decode(errors="ignore")
+
+#Demo
+def create_user(username: str, password: str, role: str) -> User:
+    salt = sha256_hex(os.urandom(8))
+    return User(username=username, salt=salt, password_hash=salted_hash(password, salt), role=role)
+
+def main():
+    random.seed(12345)
+    users = {
+        "Linda": create_user("Linda", "Burgers123", "user"),
+        "bob": create_user("bob", "Admin#42", "admin"),
+    }
+    auth = AuthSystem(users)
+
+    @auth.require_role("admin")
+    def delete_user(target_username: str) -> str:
+        if target_username in users:
+            return f"User '{target_username}' would be deleted (demo)."
+        return f"User '{target_username}' not found."
+
+    @auth.require_role("user", "admin")
+    def encrypt_message_symmetric(message: str, key: str) -> bytes:
+        return xor_encrypt(key, message.encode())
+
+    @auth.require_role("user", "admin")
+    def decrypt_message_symmetric(ciphertext: bytes, key: str) -> str:
+        return xor_decrypt(key, ciphertext).decode()
+
+    report = []
+    def log(x): report.append(x)
+
+    # Login as Linda
+    ok = auth.login("Linda", "Burgers123")
+    log(f"Login as Linda: {ok}, role={auth.current_user.role if auth.current_user else None}")
+
+    # Symmetric demo
+    sym_key = "class-demo-key"
+    plaintext = "I hope I did this right lol."
+    cipher = encrypt_message_symmetric(plaintext, sym_key)
+    recovered = decrypt_message_symmetric(cipher, sym_key)
+    log(f"Symmetric key (derived from): '{sym_key}'")
+    log(f"Symmetric plaintext: '{plaintext}'")
+    log(f"Symmetric ciphertext (hex): {cipher.hex()}")
+    log(f"Symmetric decrypted: '{recovered}'")
+
+    # Linda tries admin action
+    try:
+        _ = delete_user("charlie")
+        log("ERROR: Linda should not be able to delete users.")
+    except PermissionError as e:
+        log(f"Linda delete_user attempt: {str(e)}")
+
+    # Login as bob
+    auth.login("bob", "Admin#42")
+    log(f"Login as bob: True, role={auth.current_user.role}")
+    log(f"Admin action result: {delete_user('alice')}")
+
+if __name__ == "__main__":
+    main()
