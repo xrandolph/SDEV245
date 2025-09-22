@@ -1,0 +1,9 @@
+How to Run:
+open the command prompt and change the directory to wherever your file is located.
+initiate the program by accessing the file "python (insert file name), and then encrypt your message. It should look like python file_name encrypt --"whatever youd like to encrypt" -- password classpass
+decrypt your file in the same process, python (insert file name) decrypt --bundle bundle.sbox --password classpass
+
+How this upholds CIA:
+The plaintext is encrypted with a key derived from SHA256 to maintain confidentiality
+Integrity: before encrypting the script uses a SHA-256 hash of the plaintext and stores the hex into a bundle, on decrypt it then recomputes the SHA-246 to recover the plain text
+Availability: It runs solely off of the Python library and keeps everything needed for decryption in one bundle
